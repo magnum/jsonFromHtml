@@ -1,35 +1,82 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { buildEvalUrl } from '../shared/buildEvalUrl.js'
+import { buildPageUrl } from '../shared/buildPageUrl.js'
+import { loadBuildParams, saveBuildParams } from '../shared/buildStorage.js'
+import { resolveBuildFields } from '../shared/resolveBuildFields.js'
 
-const pageUrl = ref(
-  'https://www.teleborsa.it/fondi/vera-vita-pip-bilanciato-global-vebigl-RkMuVkVCSUdM',
-)
-const code = ref(`(function (document) {
+const DEFAULT_URL = 'https://www.teleborsa.it/fondi/vera-vita-pip-bilanciato-global-vebigl-RkMuVkVCSUdM'
+const DEFAULT_CODE = `(function (document) {
   return JSON.generate({
     value: document.querySelector("#ctl00_phContents_ctlHeader_lblPrice").innerText
   })
 })(document)
-`)
+`
+
+const route = useRoute()
 const output = ref('')
 const pending = ref(false)
-const copied = ref(false)
+const copied = ref('')
 
-const callableUrl = computed(() => {
+function queryText(value) {
+  if (Array.isArray(value)) return value[0] ?? ''
+  return typeof value === 'string' ? value : ''
+}
+
+function fieldsForQuery() {
+  return resolveBuildFields({
+    query: {
+      url: queryText(route.query.url),
+      code: queryText(route.query.code),
+    },
+    stored: loadBuildParams(window.localStorage),
+    defaults: { url: DEFAULT_URL, code: DEFAULT_CODE },
+  })
+}
+
+const initial = fieldsForQuery()
+const pageUrl = ref(initial.url)
+const code = ref(initial.code)
+
+watch(
+  () => [queryText(route.query.url), queryText(route.query.code)],
+  () => {
+    const next = fieldsForQuery()
+    pageUrl.value = next.url
+    code.value = next.code
+  },
+)
+
+const directUrl = computed(() => {
   if (!pageUrl.value.trim() || !code.value.trim()) return ''
   return buildEvalUrl(window.location.origin, pageUrl.value.trim(), code.value)
 })
 
+const buildUrl = computed(() => {
+  if (!pageUrl.value.trim() || !code.value.trim()) return ''
+  return buildPageUrl(window.location.origin, pageUrl.value.trim(), code.value)
+})
+
 async function submit() {
   output.value = ''
-  if (!callableUrl.value) {
+  if (!pageUrl.value.trim() || !code.value.trim()) {
     output.value = 'Inserisci url e code'
     return
   }
 
+  try {
+    saveBuildParams(window.localStorage, {
+      url: pageUrl.value.trim(),
+      code: code.value,
+    })
+  } catch {
+    // Submit continues when storage is unavailable.
+  }
+
   pending.value = true
   try {
-    const response = await fetch(callableUrl.value)
+    const response = await fetch(directUrl.value)
     output.value = await response.text()
   } catch (error) {
     output.value = error instanceof Error ? error.message : 'Richiesta fallita'
@@ -38,12 +85,12 @@ async function submit() {
   }
 }
 
-async function copyUrl() {
-  if (!callableUrl.value) return
-  await navigator.clipboard.writeText(callableUrl.value)
-  copied.value = true
+async function copyUrl(value, which) {
+  if (!value) return
+  await navigator.clipboard.writeText(value)
+  copied.value = which
   window.setTimeout(() => {
-    copied.value = false
+    if (copied.value === which) copied.value = ''
   }, 1400)
 }
 </script>
@@ -101,23 +148,46 @@ async function copyUrl() {
 
       <div class="flex flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <span id="input-label" class="text-xs font-semibold tracking-[0.16em] text-stone-500 uppercase">input</span>
+          <span id="direct-url-label" class="text-xs font-semibold tracking-[0.16em] text-stone-500 uppercase">direct url</span>
           <button
             type="button"
             class="text-xs font-medium text-stone-700 underline decoration-stone-300 underline-offset-2 disabled:text-stone-400"
-            :disabled="!callableUrl"
-            @click="copyUrl"
+            :disabled="!directUrl"
+            @click="copyUrl(directUrl, 'direct')"
           >
-            {{ copied ? 'Copiato' : 'Copia' }}
+            {{ copied === 'direct' ? 'Copiato' : 'Copia' }}
           </button>
         </div>
         <input
-          :value="callableUrl"
-          name="input"
-          aria-labelledby="input-label"
+          :value="directUrl"
+          name="direct-url"
+          aria-labelledby="direct-url-label"
           readonly
           spellcheck="false"
-          placeholder="L'URL completo compare qui"
+          placeholder="L'URL /eval compare qui"
+          class="rounded-md border border-stone-300 bg-white px-3 py-2 font-mono text-xs text-stone-800 outline-none"
+        />
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-3">
+          <span id="build-url-label" class="text-xs font-semibold tracking-[0.16em] text-stone-500 uppercase">build url</span>
+          <button
+            type="button"
+            class="text-xs font-medium text-stone-700 underline decoration-stone-300 underline-offset-2 disabled:text-stone-400"
+            :disabled="!buildUrl"
+            @click="copyUrl(buildUrl, 'build')"
+          >
+            {{ copied === 'build' ? 'Copiato' : 'Copia' }}
+          </button>
+        </div>
+        <input
+          :value="buildUrl"
+          name="build-url"
+          aria-labelledby="build-url-label"
+          readonly
+          spellcheck="false"
+          placeholder="L'URL /build compare qui"
           class="rounded-md border border-stone-300 bg-white px-3 py-2 font-mono text-xs text-stone-800 outline-none"
         />
       </div>
